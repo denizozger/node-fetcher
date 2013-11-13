@@ -14,15 +14,18 @@ app.listen(port, function() {
 
 var matchesAndVersions = {};
 const defaultVersion = -1;
-const cronJobTrigger = '*/5 * * * * *';
+var allDataFetched = true;
 
-new cronJob(cronJobTrigger, 
-	function(){
-    	fetchData();
-	}, 
-	function() {
-		console.error('Fetching job stopped');
-	}, true, null);
+var fetchingJob = function () {
+	if (allDataFetched) {
+		allDataFetched = false;
+		fetchData();
+	} else {
+		console.warn('[NOT READY] Data fetcher is still running, skipping this iteration');
+	}
+    setTimeout(fetchingJob, 1000);
+}
+fetchingJob();
 
 /**
  * Receive data fetch requests
@@ -58,9 +61,9 @@ function fetchData() {
     method: 'GET'
   };
 
-  async.forEach(Object.keys(matchesAndVersions), function (matchId, callback){ 
-    console.log('[BEGIN] Begin fetching match data');
+  console.log('[BEGIN] Begin fetching match data');
 
+  async.forEach(Object.keys(matchesAndVersions), function (matchId, callback) { 
     var updatedMatchData;
 
     options.path = '/matchesfeed/' + matchId + '/matchcentre';
@@ -70,14 +73,11 @@ function fetchData() {
       res.setEncoding('utf8');
 
       res.on('data', function (chunk) {
-        console.log('Received some data from data source');
         updatedMatchData += chunk;
-        console.log(updatedMatchData);
+        console.log('Received some data from data source: %s', updatedMatchData);
       });
 
       res.on('end', function(){
-        console.log('All data for match %s has been received', matchId);
-
         var updatedMatch;
         try {
         	updatedMatch = JSON.parse(updatedMatchData);
@@ -86,9 +86,6 @@ function fetchData() {
         }
 
         var existingVersion = matchesAndVersions[matchId];
-
-        console.log(JSON.stringify(updatedMatch, null, 4));
-
         var newVersion;
 
         if (updatedMatch) {
@@ -106,6 +103,9 @@ function fetchData() {
         } else {
         	console.error('Could not receive new match data or it was corrupt');
         }
+
+        console.log('All data for match %s has been received', matchId);
+        callback();
       });
 
       res.on('error', function(e) {
@@ -113,10 +113,13 @@ function fetchData() {
 	  });
     });
 	}, function(err) {
-	    console.error('Cant fetch match data: %s', err);
+		if (err) {
+			console.error('Cant fetch match data: %s', err);	
+		} 
+	    
+		allDataFetched = true; 
+		console.log('[COMPLETE] Data fetch is complete');
 	}); 
-
-	console.log('[COMPLETE] Data fetch is complete');
 }
 
 function broadcastNewMatchData() {
