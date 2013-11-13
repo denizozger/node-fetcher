@@ -3,7 +3,8 @@
   "description": "An app that fetches data from an API periodically, and broadcasts it",
   "version": "0.0.1",
   "dependencies": {
-    "express": "3.x"
+    "express": "3.x",
+    "cron": "1.0.x"
   },
   "engines": {
     "node": "0.10.x",
