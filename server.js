@@ -16,6 +16,7 @@ app.listen(port, function() {
 var matchesAndVersions = {};
 const defaultVersion = -1;
 var allDataFetched = true;
+// const dataRequestingNode = 'http://dry-wildwood-3323.herokuapp.com/broadcast/';
 const dataRequestingNode = 'http://localhost:5000/broadcast/';
 
 /**
@@ -64,8 +65,8 @@ function fetchData() {
   console.log('[BEGIN] Begin fetching data for %s matches', _.size(matchesAndVersions));
 
   var options = {
-    host: 'localhost',
-    port: 3000,
+    host: 'nameless-retreat-3788.herokuapp.com',
+    port: 80,
     method: 'GET'
   };
 
@@ -107,6 +108,7 @@ function fetchData() {
 
           if (newVersion > existingVersion) {
             broadcastNewMatchData(updatedMatch);
+            matchesAndVersions[matchId] = newVersion; // update the version
           } else {
             console.log('No changes detected for match %s', matchId)
           }
