@@ -105,15 +105,21 @@ function fetchData() {
           newVersion = updatedResource['version'];
         }
 
-        // Compare the existing and new versions
-        if (updatedResource && isNumber(existingVersion) && isNumber(newVersion)) {
-          console.log('For resource %s, current version is %s, new version is %s', resourceId, existingVersion, newVersion);  
-
-          if (newVersion > existingVersion) {
+        // Compare the existing and new versions, broadcast if necesary
+        if (updatedResource) {
+          // if there is verson information, compare the versions and broadcast if data is newer
+          if (isNumber(existingVersion) && isNumber(newVersion) && newVersion > existingVersion) {
+            console.log('Changes detected for resource %s, current version is %s, new version is %s', 
+              resourceId, existingVersion, newVersion);  
             broadcastNewResourceData(updatedResource, resourceId);
             resourcesAndVersions[resourceId] = newVersion; // update the version
+          } else if (isNumber(existingVersion) && isNumber(newVersion) && newVersion <= existingVersion){
+            console.log('No changes detected for resource %s, current version is %s, new version is %s', 
+              resourceId, existingVersion, newVersion);  
           } else {
-            console.log('No changes detected for resource %s', resourceId)
+            console.warn('No valid version information detected (current: %s, new: %s), broadcasting the data.',
+              existingVersion, newVersion);
+            broadcastNewResourceData(updatedResource, resourceId);
           }
         } else {
           console.error('Could not receive new resource data or it was corrupt');
