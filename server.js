@@ -13,7 +13,7 @@ app.listen(port, function() {
   console.log('Server listening on %s', port);
 });
 
-var matchesAndVersions = {};
+var resourcesAndVersions = {};
 const defaultVersion = -1;
 var allDataFetched = true;
 // const dataRequestingNode = 'http://dry-wildwood-3323.herokuapp.com/broadcast/';
@@ -29,40 +29,41 @@ var fetchingJob = function () {
   } else {
     console.warn('[NOT READY] Data fetcher is still running, skipping this iteration');
   }
-    setTimeout(fetchingJob, 5000);
+    setTimeout(fetchingJob, 10000);
 }
 fetchingJob();
 
 /**
  * Receive data fetch requests
  */
-app.get('/fetchlist/new/:id', function(request, response) {
-  var requestedMatchId = request.params.id;
+ // works: '/:id*' and http://localhost:5000/?/2013/02/16/title-with-hyphens
+app.get('/fetchlist/new/?*', function(request, response) {
+  var requestedResourceId = request.params[0];
 
-  if(!requestedMatchId || requestedMatchId < 0) {
+  if(!requestedResourceId) {
     console.warn('Bad Request: Invalid parameters');
     response.statusCode = 400;
     return response.send('Bad Request');
   }
 
-  if (matchesAndVersions[requestedMatchId]) {
-    console.warn('This match information is in the fetchlist already. Match id: %s', requestedMatchId);
-    return response.send('This match information is in the fetchlist already');
+  if (resourcesAndVersions[requestedResourceId]) {
+    console.warn('This resource information is in the fetchlist already. Resource id: %s', requestedResourceId);
+    return response.send('This resource information is in the fetchlist already');
   }
 
-  matchesAndVersions[requestedMatchId] = defaultVersion;
+  resourcesAndVersions[requestedResourceId] = defaultVersion;
 
-  console.log('Successfully added match (id: %s) to the fetchlist. Current fetchlist:');
-  console.log(JSON.stringify(matchesAndVersions, null, 4));
+  console.log('Successfully added resource (id: %s) to the fetchlist. Current fetchlist:', requestedResourceId);
+  console.log(JSON.stringify(resourcesAndVersions, null, 4));
 
   response.send('Success');
 });
 
 /**
- * Iterate through matches to watch, get new matches & match data, and broadcast new data if there are any
+ * Iterate through resources to watch, get new resources & resource data, and broadcast new data if there are any
  */
 function fetchData() {
-  console.log('[BEGIN] Begin fetching data for %s matches', _.size(matchesAndVersions));
+  console.log('[BEGIN] Begin fetching data for %s resources', _.size(resourcesAndVersions));
 
   var options = {
     host: 'nameless-retreat-3788.herokuapp.com',
@@ -70,63 +71,65 @@ function fetchData() {
     method: 'GET'
   };
 
-  // Asynchronously fetch match data
-  async.forEach(_.keys(matchesAndVersions), function (matchId, callback) { 
-    var updatedMatchInJSON;
+  // Asynchronously fetch resource data
+  async.forEach(_.keys(resourcesAndVersions), function (resourceId, callback) { 
+    var updatedResourceInJSON;
 
-    options.path = '/matchesfeed/' + matchId + '/matchcentre';
+    options.path = '/' + resourceId;
+
+    console.log('Fetching data for resource %s', resourceId);
 
     var req = http.get(options, function(res) {
-      var updatedMatchInJSON = '';
+      var updatedResourceInJSON = '';
       res.setEncoding('utf8');
 
       // Append data as we receive it 
       res.on('data', function (chunk) {
-        updatedMatchInJSON += chunk;
-        console.log('Received some data from data source: %s', updatedMatchInJSON);
+        updatedResourceInJSON += chunk;
+        console.log('Received some data from data source: %s', updatedResourceInJSON);
       });
 
       // When all data is received, check its version and broadcast it if received version is greater
       res.on('end', function(){
-        var updatedMatch;
+        var updatedResource;
         try {
-          updatedMatch = JSON.parse(updatedMatchInJSON);
+          updatedResource = JSON.parse(updatedResourceInJSON);
         } catch (e) {
-          console.error('Did not receive proper JSON object from data provider for match %s', matchId);
+          console.error('Did not receive proper JSON object from data provider for resource %s', resourceId);
         }
 
-        var existingVersion = matchesAndVersions[matchId];
+        var existingVersion = resourcesAndVersions[resourceId];
         var newVersion;
 
-        if (updatedMatch) {
-          newVersion = updatedMatch['version'];
+        if (updatedResource) {
+          newVersion = updatedResource['version'];
         }
 
         // Compare the existing and new versions
-        if (updatedMatch && isNumber(existingVersion) && isNumber(newVersion)) {
-          console.log('For match %s, current version is %s, new version is %s', matchId, existingVersion, newVersion);  
+        if (updatedResource && isNumber(existingVersion) && isNumber(newVersion)) {
+          console.log('For resource %s, current version is %s, new version is %s', resourceId, existingVersion, newVersion);  
 
           if (newVersion > existingVersion) {
-            broadcastNewMatchData(updatedMatch);
-            matchesAndVersions[matchId] = newVersion; // update the version
+            broadcastNewResourceData(updatedResource, resourceId);
+            resourcesAndVersions[resourceId] = newVersion; // update the version
           } else {
-            console.log('No changes detected for match %s', matchId)
+            console.log('No changes detected for resource %s', resourceId)
           }
         } else {
-          console.error('Could not receive new match data or it was corrupt');
+          console.error('Could not receive new resource data or it was corrupt');
         }
 
-        console.log('All data for match %s has been received', matchId);
+        console.log('All data for resource %s has been received', resourceId);
         callback();
       });
 
       res.on('error', function(e) {
-      console.error('Can not fetch match data: %s', e.message);
+      console.error('Can not fetch resource data: %s', e.message);
     });
     });
   }, function(err) {
     if (err) {
-      console.error('Cant fetch match data: %s', err);  
+      console.error('Cant fetch resource data: %s', err);  
     } 
       
     allDataFetched = true; 
@@ -134,29 +137,27 @@ function fetchData() {
   }); 
 }
 
-// Send new match data to websocket client - or any other server
-function broadcastNewMatchData(updatedMatch) {
-  if (updatedMatch && _.isObject(updatedMatch)) {
-    var matchId = updatedMatch['id'];
-
-    console.log('Broadcasting new match data for match %s', matchId);
+// Send new resource data to websocket client - or any other server
+function broadcastNewResourceData(updatedResource, resourceId) {
+  if (updatedResource && _.isObject(updatedResource)) {
+    console.log('Broadcasting new resource data for resource %s', resourceId);
 
     request({
-        uri: dataRequestingNode + matchId,
+        uri: dataRequestingNode + resourceId,
         method: 'POST',
         form: {
-          newMatchData: JSON.stringify(updatedMatch)
+          newResourceData: JSON.stringify(updatedResource)
         }
       }, function(error, response, body) {
         if (!error && response.statusCode == 200) {
-          console.log('Successfully broadcasted match (id: %s) request message to %s, the response is %s', 
-            matchId, dataRequestingNode + matchId, body); 
+          console.log('Successfully broadcasted resource (id: %s) request message to %s, the response is %s', 
+            resourceId, dataRequestingNode + resourceId, body); 
         } else {
-          console.error('Can not broadcast match request message to %s: %s', dataRequestingNode + matchId, error);
+          console.error('Can not broadcast resource request message to %s: %s', dataRequestingNode + resourceId, error);
         }
       });
   } else {
-    console.warn('Match data to broadcast is corrupt: %s', updatedMatch);
+    console.warn('Resource data to broadcast is corrupt: %s', updatedResource);
   }
 }
 
