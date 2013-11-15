@@ -60,6 +60,13 @@ app.get('/fetchlist/new/?*', function(request, response) {
   response.send('Success');
 });
 
+app.get('/', function(req, res){
+  var body = 'node-fetcher';
+  res.setHeader('Content-Type', 'text/plain');
+  res.setHeader('Content-Length', body.length);
+  res.end(body);
+});
+
 /**
  * Iterate through resources to watch, get new resources & resource data, and broadcast new data if there are any
  */
