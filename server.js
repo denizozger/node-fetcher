@@ -20,6 +20,8 @@ const dataProviderHost = process.env.DATA_PROVIDER_HOST || 'node-dataprovider.he
 const dataProviderPort = process.env.DATA_PROVIDER_PORT || 80;
 const fetchingJobTimeoutInMilis = 10000;
 var allDataFetched = true;
+const authorizationHeaderKey = 'bm9kZS13ZWJzb2NrZXQ=';
+const nodeWebSocketAuthorizationHeaderKey = 'bm9kZS1mZXRjaGVy';
 
 /**
  * The job that fetches data perioducally
@@ -39,6 +41,21 @@ fetchingJob();
  * Receive data fetch requests
  */
 app.get('/fetchlist/new/?*', function(request, response) {
+  // Security
+  if (request.header('Authorization') !== authorizationHeaderKey) {
+    var ip = request.ip || request.connection.remoteAddress || request.socket.remoteAddress || request.connection.socket.remoteAddress;
+
+    console.warn('Unknown server (%s) tried to add a new key to fetch list', ip);
+
+    response.writeHead(403, {
+      'Content-Type': 'text/plain'
+    }); 
+    response.shouldKeepAlive = false;
+    response.write('You are not allowed to get data from this server\n');
+    response.end();
+    return;
+  }
+
   var requestedResourceId = request.params[0];
 
   if(!requestedResourceId) {
@@ -168,6 +185,9 @@ function broadcastNewResourceData(updatedResource, resourceId) {
         method: 'POST',
         form: {
           newResourceData: JSON.stringify(updatedResource)
+        },
+        headers: {
+          Authorization: nodeWebSocketAuthorizationHeaderKey
         }
       }, function(error, response, body) {
         if (!error && response.statusCode == 200) {

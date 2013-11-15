@@ -30,5 +30,10 @@ If you setup the other three projects, you should start node-fetcher as:
 PORT=4000 DATA_REQUESTING_SERVER_URL=http://localhost:5000/broadcast/ DATA_PROVIDER_HOST=localhost DATA_PROVIDER_PORT=3000 foreman start
 ```
 
+Adding keys to the key list that fetcher gets data from, when it connects to [node-dataprovider](https://github.com/denizozger/node-dataprovider)/some-key.
+``` bash
+curl -X GET http://localhost:4000/fetchlist/new/7 -H "Authorization:ZzN0bTMxbg=="
+```
+
 [![Bitdeli Badge](https://d2weczhvl823v0.cloudfront.net/denizozger/node-fetcher/trend.png)](https://bitdeli.com/free "Bitdeli Badge")
 
