@@ -14,11 +14,12 @@ app.listen(port, function() {
 });
 
 var resourcesAndVersions = {};
-const defaultVersion = -1;
-var allDataFetched = true;
-// const dataRequestingNode = 'http://dry-wildwood-3323.herokuapp.com/broadcast/';
-const dataRequestingNode = 'http://localhost:5000/broadcast/';
+const resourceDefaultVersion = -1;
+const dataRequestingServerURL = process.env.DATA_REQUESTING_SERVER_URL || 'http://dry-wildwood-3323.herokuapp.com/broadcast/';
+const dataProviderHost = process.env.DATA_PROVIDER_HOST || 'nameless-retreat-3788.herokuapp.com';
+const dataProviderPort = process.env.DATA_PROVIDER_PORT || 80;
 const fetchingJobTimeoutInMilis = 10000;
+var allDataFetched = true;
 
 /**
  * The job that fetches data perioducally
@@ -37,7 +38,6 @@ fetchingJob();
 /**
  * Receive data fetch requests
  */
- // works: '/:id*' and http://localhost:5000/?/2013/02/16/title-with-hyphens
 app.get('/fetchlist/new/?*', function(request, response) {
   var requestedResourceId = request.params[0];
 
@@ -52,7 +52,7 @@ app.get('/fetchlist/new/?*', function(request, response) {
     return response.send('This resource information is in the fetchlist already');
   }
 
-  resourcesAndVersions[requestedResourceId] = defaultVersion;
+  resourcesAndVersions[requestedResourceId] = resourceDefaultVersion;
 
   console.log('Successfully added resource (id: %s) to the fetchlist. Current fetchlist:', requestedResourceId);
   console.log(JSON.stringify(resourcesAndVersions, null, 4));
@@ -68,8 +68,8 @@ function fetchData() {
     _.size(resourcesAndVersions), fetchingJobTimeoutInMilis);
 
   var options = {
-    host: 'nameless-retreat-3788.herokuapp.com',
-    port: 80,
+    host: dataProviderHost,
+    port: dataProviderPort,
     method: 'GET'
   };
 
@@ -157,7 +157,7 @@ function broadcastNewResourceData(updatedResource, resourceId) {
     console.log('Broadcasting new resource data for resource %s', resourceId);
 
     request({
-        uri: dataRequestingNode + resourceId,
+        uri: dataRequestingServerURL + resourceId,
         method: 'POST',
         form: {
           newResourceData: JSON.stringify(updatedResource)
@@ -165,9 +165,10 @@ function broadcastNewResourceData(updatedResource, resourceId) {
       }, function(error, response, body) {
         if (!error && response.statusCode == 200) {
           console.log('Successfully broadcasted resource (id: %s) request message to %s, the response is %s', 
-            resourceId, dataRequestingNode + resourceId, body); 
+            resourceId, dataRequestingServerURL + resourceId, body); 
         } else {
-          console.error('Can not broadcast resource request message to %s: %s', dataRequestingNode + resourceId, error);
+          console.error('Can not broadcast resource request message to %s: %s', 
+            dataRequestingServerURL + resourceId, error);
         }
       });
   } else {
