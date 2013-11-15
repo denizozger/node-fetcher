@@ -16,8 +16,9 @@ Some code that connects to an API runs in an infinite loop.
 1. Listens to HTTP GETs to /fetchlist/new/some-key.
 2. Adds some-key to key list on memory
 3. The periodic job goes over key list, and requests JSON data from another API (ie. http://data-provider/some-key)
-4. If there is version information, checks the version and if data is new, sends it to the server which issued HTTP GET /fetchlist/new/some-key on step 1
+4. If there is version information, checks the version to determine if data is new
 5. If "terminated" flag is on, removes some-key from the key list
+6. Transmits new data to the server which issued HTTP GET /fetchlist/new/some-key on step 1
 
 ![Schema](http://i39.tinypic.com/2hnrght.png)
 
