@@ -18,6 +18,7 @@ const defaultVersion = -1;
 var allDataFetched = true;
 // const dataRequestingNode = 'http://dry-wildwood-3323.herokuapp.com/broadcast/';
 const dataRequestingNode = 'http://localhost:5000/broadcast/';
+const fetchingJobTimeoutInMilis = 10000;
 
 /**
  * The job that fetches data perioducally
@@ -28,8 +29,8 @@ var fetchingJob = function () {
     fetchData();
   } else {
     console.warn('[NOT READY] Data fetcher is still running, skipping this iteration');
-  }
-    setTimeout(fetchingJob, 10000);
+  }  
+  setTimeout(fetchingJob, fetchingJobTimeoutInMilis);
 }
 fetchingJob();
 
@@ -63,7 +64,8 @@ app.get('/fetchlist/new/?*', function(request, response) {
  * Iterate through resources to watch, get new resources & resource data, and broadcast new data if there are any
  */
 function fetchData() {
-  console.log('[BEGIN] Begin fetching data for %s resources', _.size(resourcesAndVersions));
+  console.log('[BEGIN] Begin fetching data for %s resources. Timeout is %s miliseconds.', 
+    _.size(resourcesAndVersions), fetchingJobTimeoutInMilis);
 
   var options = {
     host: 'nameless-retreat-3788.herokuapp.com',
@@ -120,6 +122,12 @@ function fetchData() {
             console.warn('No valid version information detected (current: %s, new: %s), broadcasting the data.',
               existingVersion, newVersion);
             broadcastNewResourceData(updatedResource, resourceId);
+          }
+
+          // if the resource is termianted, remove it from the list
+          if (updatedResource.terminated === true) {
+            console.log('Resource appears to be terminated, removing it from the list');
+            delete resourcesAndVersions[resourceId];
           }
         } else {
           console.error('Could not receive new resource data or it was corrupt');
