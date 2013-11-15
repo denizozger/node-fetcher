@@ -86,7 +86,7 @@ function fetchData() {
 
     options.path = '/' + resourceId;
 
-    console.log('Fetching data for resource %s', resourceId);
+    console.log('Fetching data for resource %s from %s:%s', resourceId, dataProviderHost, dataProviderPort);
 
     var req = http.get(options, function(res) {
       var updatedResourceInJSON = '';
