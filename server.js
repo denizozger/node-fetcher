@@ -15,7 +15,7 @@ app.listen(port, function() {
 
 var resourcesAndVersions = {};
 const resourceDefaultVersion = -1;
-const dataRequestingServerURL = process.env.DATA_REQUESTING_SERVER_URL || 'http://dry-wildwood-3323.herokuapp.com/broadcast/';
+const dataRequestingServerURL = process.env.DATA_REQUESTING_SERVER_URL || 'http://node-websocket-server.herokuapp.com/broadcast/';
 const dataProviderHost = process.env.DATA_PROVIDER_HOST || 'nameless-retreat-3788.herokuapp.com';
 const dataProviderPort = process.env.DATA_PROVIDER_PORT || 80;
 const fetchingJobTimeoutInMilis = 10000;
