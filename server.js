@@ -34,7 +34,7 @@ var fetchingJob = function () {
     console.warn('[NOT READY] Data fetcher is still running, skipping this iteration');
   }  
   setTimeout(fetchingJob, fetchingJobTimeoutInMilis);
-}
+};
 fetchingJob();
 
 /**
@@ -99,7 +99,6 @@ function fetchData() {
 
   // Asynchronously fetch resource data
   async.forEach(_.keys(resourcesAndVersions), function (resourceId, callback) { 
-    var updatedResourceInJSON;
 
     options.path = '/' + resourceId;
 
@@ -128,7 +127,7 @@ function fetchData() {
         var newVersion;
 
         if (updatedResource) {
-          newVersion = updatedResource['version'];
+          newVersion = updatedResource.version;
         }
 
         // Compare the existing and new versions, broadcast if necesary
