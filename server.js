@@ -183,7 +183,7 @@ function broadcastNewResourceData(updatedResource, resourceId) {
     console.log('Broadcasting new resource data for resource %s', resourceId);
 
     request({
-        uri: dataRequestingServerURL + resourceId,
+        uri: dataRequestingServerURL + resourceId + '/?newResourceData=' + JSON.stringify(updatedResource),
         method: 'POST',
         form: {
           newResourceData: JSON.stringify(updatedResource)
