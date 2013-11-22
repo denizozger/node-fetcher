@@ -8,7 +8,7 @@ var util = require('util');
 
 app.use(express.logger());
 
-var port = process.env.PORT || 5000;
+var port = process.env.PORT || 4000;
 
 app.listen(port, function() {
   console.log('Server listening on %s', port);
@@ -74,11 +74,11 @@ app.get('/fetchlist/new/?*', function(req, res) {
 });
 
 // Send new resource data to websocket client - or any other server
-function broadcastNewResourceData(updatedResource, resourceId) {
+function broadcastResourceData(updatedResource, resourceId) {
   console.log('Broadcasting new resource data for resource %s', resourceId);
 
   request({
-      uri: dataRequestingServerURL + resourceId + '/?newResourceData=' + JSON.stringify(updatedResource),
+      uri: dataRequestingServerURL + resourceId,
       method: 'POST',
       form: {
         newResourceData: JSON.stringify(updatedResource)
@@ -88,8 +88,8 @@ function broadcastNewResourceData(updatedResource, resourceId) {
       }
     }, function(error, response, body) {
       if (!error && response.statusCode == 200) {
-        console.log('Successfully broadcasted resource (id: %s) request message to %s, the response is %s', 
-          resourceId, dataRequestingServerURL + resourceId, body); 
+        console.log('Successfully broadcasted resource (id: %s) request message to %s', 
+          resourceId, dataRequestingServerURL + resourceId); 
       } else {
         console.error('Can not broadcast resource request message to %s: %s', 
           dataRequestingServerURL + resourceId, error);
@@ -118,8 +118,8 @@ function handleResourceRequest(req, res) {
   }
 
   if (resourceVersions[resourceId]) {
-    console.warn('This resource information is in the fetchlist already. Resource id: %s', resourceId);
-    return res.send('This resource information is in the fetchlist already');
+    // This can only happen if websocket server is restarted. 
+    console.warn('This resource (%s) data is in the fetchlist already, defaulting the version', resourceId);
   }
 
   resourceVersions[resourceId] = resourceDefaultVersion;
@@ -149,8 +149,7 @@ var fetchResource = function (resourceId, callback) {
   fetchDataRequestOptions.path = '/' + resourceId;
   
   // console.log('***MEMORY*** ' + util.inspect(process.memoryUsage()));
-
-  console.log('[BEGIN %s] Fetching datafrom %s:%s', resourceId, dataProviderHost, dataProviderPort);
+  // console.log('[BEGIN %s] Fetching datafrom %s:%s', resourceId, dataProviderHost, dataProviderPort);
 
   var handleReceivedResource = function(res) {
     var updatedResourceInJSON = '';
@@ -182,7 +181,7 @@ var fetchResource = function (resourceId, callback) {
 
         resourceVersions[resourceId] = updatedResource.version; // update the version
         
-        broadcastNewResourceData(updatedResource, resourceId);
+        broadcastResourceData(updatedResource, resourceId);
         
         // FIX: THIS MIGHT BE CAUSING MEMORY LEAK
 
