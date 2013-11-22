@@ -4,6 +4,7 @@ var http = require('http');
 var async = require('async');
 var _ = require('underscore');
 var request = require('request');
+var util = require('util');
 
 app.use(express.logger());
 
@@ -13,12 +14,13 @@ app.listen(port, function() {
   console.log('Server listening on %s', port);
 });
 
-var resourcesAndVersions = {};
+var resourceVersions = {};
 const resourceDefaultVersion = -1;
 const dataRequestingServerURL = process.env.DATA_REQUESTING_SERVER_URL || 'http://node-websocket-server.herokuapp.com/broadcast/';
 const dataProviderHost = process.env.DATA_PROVIDER_HOST || 'node-dataprovider.herokuapp.com';
 const dataProviderPort = process.env.DATA_PROVIDER_PORT || 80;
-const fetchingJobTimeoutInMilis = 10000;
+const fetchingJobTimeoutInMilis = 2000;
+const defaultResourceMaxAgeInMilis = 5000;
 var fetchJobLocked = false;
 const authorizationHeaderKey = 'bm9kZS13ZWJzb2NrZXQ=';
 const nodeWebSocketAuthorizationHeaderKey = 'bm9kZS1mZXRjaGVy';
@@ -32,7 +34,8 @@ var fetchDataRequestOptions = {
  * The job that fetches data periodically
  */
 var fetchingJob = function () {
-  if (!isEmpty(resourcesAndVersions)) {
+  console.log('***MEMORY*** ' + util.inspect(process.memoryUsage()));
+  if (!isEmpty(resourceVersions)) {
     if (!fetchJobLocked) {
       fetchJobLocked = true;
       fetchAllResources();
@@ -40,7 +43,7 @@ var fetchingJob = function () {
       console.warn('[NOT READY] Data fetcher is still running, skipping this iteration');
     }
   } else {
-    console.log('No resources to fetch');
+    console.log('No resourceVersions to fetch');
   }
   setTimeout(fetchingJob, fetchingJobTimeoutInMilis);
 };
@@ -72,30 +75,26 @@ app.get('/fetchlist/new/?*', function(req, res) {
 
 // Send new resource data to websocket client - or any other server
 function broadcastNewResourceData(updatedResource, resourceId) {
-  if (updatedResource && _.isObject(updatedResource)) {
-    console.log('Broadcasting new resource data for resource %s', resourceId);
+  console.log('Broadcasting new resource data for resource %s', resourceId);
 
-    request({
-        uri: dataRequestingServerURL + resourceId + '/?newResourceData=' + JSON.stringify(updatedResource),
-        method: 'POST',
-        form: {
-          newResourceData: JSON.stringify(updatedResource)
-        },
-        headers: {
-          Authorization: nodeWebSocketAuthorizationHeaderKey
-        }
-      }, function(error, response, body) {
-        if (!error && response.statusCode == 200) {
-          console.log('Successfully broadcasted resource (id: %s) request message to %s, the response is %s', 
-            resourceId, dataRequestingServerURL + resourceId, body); 
-        } else {
-          console.error('Can not broadcast resource request message to %s: %s', 
-            dataRequestingServerURL + resourceId, error);
-        }
-      });
-  } else {
-    console.warn('Resource data to broadcast is corrupt: %s', updatedResource);
-  }
+  request({
+      uri: dataRequestingServerURL + resourceId + '/?newResourceData=' + JSON.stringify(updatedResource),
+      method: 'POST',
+      form: {
+        newResourceData: JSON.stringify(updatedResource)
+      },
+      headers: {
+        Authorization: nodeWebSocketAuthorizationHeaderKey
+      }
+    }, function(error, response, body) {
+      if (!error && response.statusCode == 200) {
+        console.log('Successfully broadcasted resource (id: %s) request message to %s, the response is %s', 
+          resourceId, dataRequestingServerURL + resourceId, body); 
+      } else {
+        console.error('Can not broadcast resource request message to %s: %s', 
+          dataRequestingServerURL + resourceId, error);
+      }
+    });
 }
 
 app.get('/', function(req, res){
@@ -118,15 +117,15 @@ function handleResourceRequest(req, res) {
     return res.send('Bad Request');
   }
 
-  if (resourcesAndVersions[resourceId]) {
+  if (resourceVersions[resourceId]) {
     console.warn('This resource information is in the fetchlist already. Resource id: %s', resourceId);
     return res.send('This resource information is in the fetchlist already');
   }
 
-  resourcesAndVersions[resourceId] = resourceDefaultVersion;
+  resourceVersions[resourceId] = resourceDefaultVersion;
 
   console.log('Successfully added resource (id: %s) to the fetchlist. Current fetchlist:', resourceId);
-  console.log(JSON.stringify(resourcesAndVersions, null, 4));
+  console.log(JSON.stringify(resourceVersions, null, 4));
 
   // trigger a fetch
   fetchResource(resourceId, releaseFetchJobLock);
@@ -136,20 +135,22 @@ function handleResourceRequest(req, res) {
 }
 
 /**
- * Iterate through resources to watch, get new resources & resource data, and broadcast new data if there are any
+ * Iterate through resourceVersions to watch, get new resourceVersions & resource data, and broadcast new data if there are any
  */
 function fetchAllResources() {
-  console.log('[BEGIN] Begin fetching data for %s resources. Timeout is %s miliseconds.', 
-    _.size(resourcesAndVersions), fetchingJobTimeoutInMilis);
+  console.log('[BEGIN] Begin fetching data for %s resourceVersions. Timeout is %s miliseconds.', 
+    _.size(resourceVersions), fetchingJobTimeoutInMilis);
 
   // Asynchronously fetch every resource's data
-  async.forEach(_.keys(resourcesAndVersions), fetchResource, releaseFetchJobLock); 
+  async.forEach(_.keys(resourceVersions), fetchResource, releaseFetchJobLock); 
 }
 
 var fetchResource = function (resourceId, callback) { 
   fetchDataRequestOptions.path = '/' + resourceId;
+  
+  // console.log('***MEMORY*** ' + util.inspect(process.memoryUsage()));
 
-  console.log('Fetching data for resource %s from %s:%s', resourceId, dataProviderHost, dataProviderPort);
+  console.log('[BEGIN %s] Fetching datafrom %s:%s', resourceId, dataProviderHost, dataProviderPort);
 
   var handleReceivedResource = function(res) {
     var updatedResourceInJSON = '';
@@ -168,39 +169,41 @@ var fetchResource = function (resourceId, callback) {
         updatedResource = JSON.parse(updatedResourceInJSON);
       } catch (e) {
         console.error('Did not receive proper JSON object from data provider for resource %s', resourceId);
+        return;
       }
 
-      var existingVersion = resourcesAndVersions[resourceId];
-      var newVersion;
+      var existingVersion = resourceVersions[resourceId];
+      var newVersion = updatedResource.version;
 
-      if (updatedResource) {
-        newVersion = updatedResource.version;
-      }
+      // if there is verson information, compare the versions and broadcast if data is newer
+      if (isNumber(existingVersion) && isNumber(newVersion) && newVersion > existingVersion) {
+        console.log('Changes detected for resource %s, current version is %s, new version is %s with a max age of %s miliseconds', 
+          resourceId, existingVersion, newVersion, updatedResource.maxAgeInMilis);  
 
-      // Compare the existing and new versions, broadcast if necesary
-      if (updatedResource) {
-        // if there is verson information, compare the versions and broadcast if data is newer
-        if (isNumber(existingVersion) && isNumber(newVersion) && newVersion > existingVersion) {
-          console.log('Changes detected for resource %s, current version is %s, new version is %s', 
-            resourceId, existingVersion, newVersion);  
-          broadcastNewResourceData(updatedResource, resourceId);
-          resourcesAndVersions[resourceId] = newVersion; // update the version
-        } else if (isNumber(existingVersion) && isNumber(newVersion) && newVersion <= existingVersion){
-          console.log('No changes detected for resource %s, current version is %s, new version is %s', 
-            resourceId, existingVersion, newVersion);  
-        } else {
-          console.warn('No valid version information detected (current: %s, new: %s), broadcasting the data.',
-            existingVersion, newVersion);
-          broadcastNewResourceData(updatedResource, resourceId);
-        }
+        resourceVersions[resourceId] = updatedResource.version; // update the version
+        
+        broadcastNewResourceData(updatedResource, resourceId);
+        
+        // FIX: THIS MIGHT BE CAUSING MEMORY LEAK
 
-        // if the resource is termianted, remove it from the list
-        if (updatedResource.terminated === true) {
-          console.log('Resource appears to be terminated, removing it from the list');
-          delete resourcesAndVersions[resourceId];
-        }
+        // var maxAgeForThisResourceInMilis = updatedResource.maxAgeInMilis ? updatedResource.maxAgeInMilis : defaultResourceMaxAgeInMilis;
+        // setTimeout(function fetchResourceRecursively() {
+          // fetchResource(resourceId, releaseFetchJobLock);
+        // }, maxAgeForThisResourceInMilis); 
+
+      } else if (isNumber(existingVersion) && isNumber(newVersion) && newVersion <= existingVersion){
+        console.log('No changes detected for resource %s, current version is %s, new version is %s', 
+          resourceId, existingVersion, newVersion);  
       } else {
-        console.error('Could not receive new resource data or it was corrupt');
+        console.warn('No valid version information detected (current: %s, new: %s), broadcasting the data.',
+          existingVersion, newVersion);
+        broadcastNewResourceData(updatedResource, resourceId);
+      }
+
+      // if the resource is termianted, remove it from the list
+      if (updatedResource.terminated === true) {
+        console.log('Resource appears to be terminated, removing it from the list');
+        delete resourceVersions[resourceId];
       }
 
       console.log('All data for resource %s has been received', resourceId);
@@ -213,7 +216,7 @@ var fetchResource = function (resourceId, callback) {
     });
   }
 
-  http.get(fetchDataRequestOptions, handleReceivedResource).on('error', releaseFetchJobLock);  
+  http.get(fetchDataRequestOptions, handleReceivedResource).on('error', releaseFetchJobLock); 
 }
 
 var releaseFetchJobLock = function(err) {
