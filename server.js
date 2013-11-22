@@ -16,7 +16,7 @@ app.listen(port, function() {
 
 var resourceVersions = {};
 const resourceDefaultVersion = -1;
-const dataRequestingServerURL = process.env.DATA_REQUESTING_SERVER_URL || 'http://node-websocket-server.herokuapp.com/broadcast/';
+const dataRequestingServerURL = process.env.DATA_REQUESTING_SERVER_URL || 'http://node-socketio.herokuapp.com/broadcast/';
 const dataProviderHost = process.env.DATA_PROVIDER_HOST || 'node-dataprovider.herokuapp.com';
 const dataProviderPort = process.env.DATA_PROVIDER_PORT || 80;
 const fetchingJobTimeoutInMilis = 2000;
