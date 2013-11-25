@@ -31,23 +31,24 @@ var fetchDataRequestOptions = {
   };
 
 /**
+ * TODO: COMMENTED OUT TO TEST INDIVIDUAL FETCHING OF RESOURCES
  * The job that fetches data periodically
  */
-var fetchingJob = function () {
-  console.log('***MEMORY*** ' + util.inspect(process.memoryUsage()));
-  if (!isEmpty(resourceVersions)) {
-    if (!fetchJobLocked) {
-      fetchJobLocked = true;
-      fetchAllResources();
-    } else {
-      console.warn('[NOT READY] Data fetcher is still running, skipping this iteration');
-    }
-  } else {
-    console.log('No resourceVersions to fetch');
-  }
-  setTimeout(fetchingJob, fetchingJobTimeoutInMilis);
-};
-fetchingJob();
+// function fetchingJob() {
+//   console.log('***MEMORY*** ' + util.inspect(process.memoryUsage()));
+//   if (!isEmpty(resourceVersions)) {
+//     if (!fetchJobLocked) {
+//       fetchJobLocked = true;
+//       fetchAllResources();
+//     } else {
+//       console.warn('[NOT READY] Data fetcher is still running, skipping this iteration');
+//     }
+//   } else {
+//     console.log('No resourceVersions to fetch');
+//   }
+//   setTimeout(fetchingJob, fetchingJobTimeoutInMilis);
+// };
+// fetchingJob();
 
 /**
  * Public Endpoints
@@ -91,7 +92,7 @@ function broadcastResourceData(updatedResource, resourceId) {
         console.log('Successfully broadcasted resource (id: %s) request message to %s', 
           resourceId, dataRequestingServerURL + resourceId); 
       } else {
-        console.error('Can not broadcast resource request message to %s: %s', 
+        console.error('[WARNING] Can not broadcast resource request message to %s: %s', 
           dataRequestingServerURL + resourceId, error);
       }
     });
@@ -183,30 +184,33 @@ var fetchResource = function (resourceId, callback) {
         
         broadcastResourceData(updatedResource, resourceId);
         
-        // FIX: THIS MIGHT BE CAUSING MEMORY LEAK
-
-        // var maxAgeForThisResourceInMilis = updatedResource.maxAgeInMilis ? updatedResource.maxAgeInMilis : defaultResourceMaxAgeInMilis;
-        // setTimeout(function fetchResourceRecursively() {
-          // fetchResource(resourceId, releaseFetchJobLock);
-        // }, maxAgeForThisResourceInMilis); 
-
       } else if (isNumber(existingVersion) && isNumber(newVersion) && newVersion <= existingVersion){
         console.log('No changes detected for resource %s, current version is %s, new version is %s', 
           resourceId, existingVersion, newVersion);  
       } else {
         console.warn('No valid version information detected (current: %s, new: %s), broadcasting the data.',
           existingVersion, newVersion);
-        broadcastNewResourceData(updatedResource, resourceId);
+        broadcastResourceData(updatedResource, resourceId);
       }
+
+      console.log('All data for resource %s has been received', resourceId);
 
       // if the resource is termianted, remove it from the list
       if (updatedResource.terminated === true) {
         console.log('Resource appears to be terminated, removing it from the list');
         delete resourceVersions[resourceId];
+      } else {
+
+        // TODO: THIS MIGHT BE CAUSING MEMORY LEAK
+        var maxAgeForThisResourceInMilis = updatedResource.maxAgeInMilis ? updatedResource.maxAgeInMilis : defaultResourceMaxAgeInMilis;
+        setTimeout(function fetchResourceRecursively() {
+          fetchResource(resourceId, null);
+        }, maxAgeForThisResourceInMilis); 
       }
 
-      console.log('All data for resource %s has been received', resourceId);
-      callback();
+      if (callback) {
+        callback();
+      }
     });
 
     res.on('error', function(e) {
@@ -220,7 +224,7 @@ var fetchResource = function (resourceId, callback) {
 
 var releaseFetchJobLock = function(err) {
   if (err) {
-    console.error('Cant fetch resource data: %s', err);  
+    console.error('[ERROR] Cant fetch resource data: %s', err);  
   } 
     
   fetchJobLocked = false; 
