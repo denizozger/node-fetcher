@@ -1,3 +1,8 @@
+require('nodetime').profile({
+  accountKey: '7724d01175fed4cb54a011b85769b7b58a15bf6d', 
+  appName: 'node-fetcher'
+});
+
 var express = require('express');
 var app = express();
 var http = require('http');
@@ -5,6 +10,7 @@ var async = require('async');
 var _ = require('underscore');
 var request = require('request');
 var util = require('util');
+var memwatch = require('memwatch');
 
 app.use(express.logger());
 
@@ -12,6 +18,11 @@ var port = process.env.PORT || 4000;
 
 app.listen(port, function() {
   console.log('Server listening on %s', port);
+});
+
+memwatch.on('leak', function(info) {
+  console.error('[MEMORY LEAK]' + JSON.stringify(info));
+  process.exit(1);
 });
 
 var resourceVersions = {};
@@ -29,26 +40,6 @@ var fetchDataRequestOptions = {
     port: dataProviderPort,
     method: 'GET'
   };
-
-/**
- * TODO: COMMENTED OUT TO TEST INDIVIDUAL FETCHING OF RESOURCES
- * The job that fetches data periodically
- */
-// function fetchingJob() {
-//   console.log('***MEMORY*** ' + util.inspect(process.memoryUsage()));
-//   if (!isEmpty(resourceVersions)) {
-//     if (!fetchJobLocked) {
-//       fetchJobLocked = true;
-//       fetchAllResources();
-//     } else {
-//       console.warn('[NOT READY] Data fetcher is still running, skipping this iteration');
-//     }
-//   } else {
-//     console.log('No resourceVersions to fetch');
-//   }
-//   setTimeout(fetchingJob, fetchingJobTimeoutInMilis);
-// };
-// fetchingJob();
 
 /**
  * Public Endpoints
@@ -129,28 +120,18 @@ function handleResourceRequest(req, res) {
   console.log(JSON.stringify(resourceVersions, null, 4));
 
   // trigger a fetch
-  fetchResource(resourceId, releaseFetchJobLock);
+  process.nextTick(function() {
+      fetchResource(resourceId, releaseFetchJobLock);
+  });  
 
   res.statusCode = 200;
   res.send('Success');  
 }
 
-/**
- * Iterate through resourceVersions to watch, get new resourceVersions & resource data, and broadcast new data if there are any
- */
-function fetchAllResources() {
-  console.log('[BEGIN] Begin fetching data for %s resourceVersions. Timeout is %s miliseconds.', 
-    _.size(resourceVersions), fetchingJobTimeoutInMilis);
-
-  // Asynchronously fetch every resource's data
-  async.forEach(_.keys(resourceVersions), fetchResource, releaseFetchJobLock); 
-}
-
 var fetchResource = function (resourceId, callback) { 
   fetchDataRequestOptions.path = '/' + resourceId;
   
-  // console.log('***MEMORY*** ' + util.inspect(process.memoryUsage()));
-  // console.log('[BEGIN %s] Fetching datafrom %s:%s', resourceId, dataProviderHost, dataProviderPort);
+  console.log('[BEGIN %s] Fetching datafrom %s:%s', resourceId, dataProviderHost, dataProviderPort);
 
   var handleReceivedResource = function(res) {
     var updatedResourceInJSON = '';
@@ -200,10 +181,9 @@ var fetchResource = function (resourceId, callback) {
         console.log('Resource appears to be terminated, removing it from the list');
         delete resourceVersions[resourceId];
       } else {
-
-        // TODO: THIS MIGHT BE CAUSING MEMORY LEAK
         var maxAgeForThisResourceInMilis = updatedResource.maxAgeInMilis ? updatedResource.maxAgeInMilis : defaultResourceMaxAgeInMilis;
-        setTimeout(function fetchResourceRecursively() {
+
+        setTimeout(function fetchThisResourceRecursively() {
           fetchResource(resourceId, null);
         }, maxAgeForThisResourceInMilis); 
       }

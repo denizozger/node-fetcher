@@ -6,7 +6,8 @@
     "express": "3.x",
     "async": "0.2.x",
     "request": "2.27.x",
-    "underscore": "1.5.x"
+    "underscore": "1.5.x",
+    "nodetime": "0.8.x"
   },
   "engines": {
     "node": "0.10.x",
