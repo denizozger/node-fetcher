@@ -1,220 +1,234 @@
-require('nodetime').profile({
-  accountKey: '7724d01175fed4cb54a011b85769b7b58a15bf6d', 
-  appName: 'node-fetcher'
-});
+'use strict';
 
-var express = require('express');
-var app = express();
-var http = require('http');
-var async = require('async');
-var _ = require('underscore');
-var request = require('request');
-var util = require('util');
-var memwatch = require('memwatch');
+const express = require('express'),
+  app = express(),
+  http = require('http'),
+  request = require('request'),
+  zmq = require('zmq'),
+  cluster = require('cluster'),
+  log = require('npmlog');
 
-app.use(express.logger());
+app.use(express.logger('dev'));
 
 var port = process.env.PORT || 4000;
 
-app.listen(port, function() {
-  console.log('Server listening on %s', port);
-});
+const DEFAULT_MAX_AGE = 5;
+const DATA_REQUESTING_SERVER_URL = process.env.DATA_REQUESTING_SERVER_URL || 'http://node-socketio.herokuapp.com/broadcast/';
+const DATA_PROVIDER_HOST = process.env.DATA_PROVIDER_HOST || 'node-dataprovider.herokuapp.com';
+const DATA_PROVIDER_PORT = process.env.DATA_PROVIDER_PORT || 80;
+const AUTHORIZATION_HEADER_KEY = 'bm9kZS13ZWJzb2NrZXQ=';
+const WEB_SOCKET_SERVER_AUTHORIZATION_HEADER_KEY = 'bm9kZS1mZXRjaGVy';
+const LOGGING_LEVEL = process.env.LOGGING_LEVEL || 'verbose';
+const RETRY_FETCHING = 'retry';
+const RESOURCE_FETCHED = 'fetched';
 
-memwatch.on('leak', function(info) {
-  console.error('[MEMORY LEAK]' + JSON.stringify(info));
-  process.exit(1);
-});
+log.level = LOGGING_LEVEL;
 
-var resourceVersions = {};
-const resourceDefaultVersion = -1;
-const dataRequestingServerURL = process.env.DATA_REQUESTING_SERVER_URL || 'http://node-socketio.herokuapp.com/broadcast/';
-const dataProviderHost = process.env.DATA_PROVIDER_HOST || 'node-dataprovider.herokuapp.com';
-const dataProviderPort = process.env.DATA_PROVIDER_PORT || 80;
-const fetchingJobTimeoutInMilis = 2000;
-const defaultResourceMaxAgeInMilis = 5000;
-var fetchJobLocked = false;
-const authorizationHeaderKey = 'bm9kZS13ZWJzb2NrZXQ=';
-const nodeWebSocketAuthorizationHeaderKey = 'bm9kZS1mZXRjaGVy';
-var fetchDataRequestOptions = {
-    host: dataProviderHost,
-    port: dataProviderPort,
-    method: 'GET'
-  };
+var socketErrorHandler = function (error) {
+    if (error) {
+      log.error(error);
+      throw Error(error);
+    }
+};
+
+var fetchJobs = {}; // key = resourceId, value = job details & resource data
 
 /**
- * Public Endpoints
+ * Master process
  */
+if (cluster.isMaster) {
 
-// Receive data fetch requests 
-app.get('/fetchlist/new/?*', function(req, res) {
-  // Security
-  if (req.header('Authorization') !== authorizationHeaderKey) {
-    var ip = req.ip || req.connection.remoteAddress || req.socket.remoteAddress || req.connection.socket.remoteAddress;
+  app.listen(port, function() {
+    log.info('Server ' + process.pid + ' listening on', port);
+  });
 
-    console.warn('Unknown server (%s) tried to add a new key to fetch list', ip);
+  // Receive resource required messages from WebSocketServer
+  const resourceRequiredSubscriber = zmq.socket('sub').connect('tcp://localhost:5432');
+  resourceRequiredSubscriber.subscribe('');
+  // Publish resource data to WebSocketServer
+  const resourceUpdatedPublisher = zmq.socket('pub').bind('tcp://*:5433', socketErrorHandler);
 
-    res.writeHead(403, {
-      'Content-Type': 'text/plain'
-    }); 
-    res.shouldKeepAlive = false;
-    res.write('You are not allowed to get data from this server\n');
-    res.end();
-    return;
-  }
+  // Push resource fetch jobs to workers
+  const resourceFetchJobPusher = zmq.socket('push').bind('ipc://resource-fetch-job-pusher.ipc', socketErrorHandler);
+  // Pull the result of fetch jobs (ie. resource data)
+  const resourceFetchJobResultPuller = zmq.socket('pull').bind('ipc://resource-fetch-job-result-puller.ipc', socketErrorHandler);
 
-  handleResourceRequest(req, res);
-});
 
-// Send new resource data to websocket client - or any other server
-function broadcastResourceData(updatedResource, resourceId) {
-  console.log('Broadcasting new resource data for resource %s', resourceId);
+  resourceRequiredSubscriber.on('message', function (message) {
+      handleResourceRequested(message);     
+  });
 
-  request({
-      uri: dataRequestingServerURL + resourceId,
-      method: 'POST',
-      form: {
-        newResourceData: JSON.stringify(updatedResource)
+  function handleResourceRequested(message) {
+    var resourceId = JSON.parse(message).id;
+
+    if (fetchJobs[resourceId]) {
+      log.silly('This resource is in fetch queue already: ' + resourceId);
+      return;
+    }
+
+    var fetchJob = {
+      resource : {
+        id: resourceId,
+        data: null
       },
-      headers: {
-        Authorization: nodeWebSocketAuthorizationHeaderKey
-      }
-    }, function(error, response, body) {
-      if (!error && response.statusCode == 200) {
-        console.log('Successfully broadcasted resource (id: %s) request message to %s', 
-          resourceId, dataRequestingServerURL + resourceId); 
-      } else {
-        console.error('[WARNING] Can not broadcast resource request message to %s: %s', 
-          dataRequestingServerURL + resourceId, error);
-      }
-    });
-}
+      timeToFetchAgain : Date.now()
+    };
 
-app.get('/', function(req, res){
-  var body = 'node-fetcher';
-  res.setHeader('Content-Type', 'text/plain');
-  res.setHeader('Content-Length', body.length);
-  res.end(body);
-});
+    fetchJobs[resourceId] = fetchJob;
 
-/**
- * Implementation of public endpoints
- */
+    resourceFetchJobPusher.send(JSON.stringify(fetchJob));  
 
-function handleResourceRequest(req, res) {
-  var resourceId = req.params[0];
-
-  if(!resourceId) {
-    console.warn('Bad Request: Invalid parameters');
-    res.statusCode = 400;
-    return res.send('Bad Request');
+    log.silly('Pushed a fetch job for ' + fetchJob.id);
   }
 
-  if (resourceVersions[resourceId]) {
-    // This can only happen if websocket server is restarted. 
-    console.warn('This resource (%s) data is in the fetchlist already, defaulting the version', resourceId);
+  resourceFetchJobResultPuller.on('message', function (data) {
+    var fetchJob = JSON.parse(data);
+
+    log.silly('Master received new resource: ' + JSON.stringify(fetchJob));  
+
+    if (fetchJob.result === RESOURCE_FETCHED) {
+      publishResourceReceived(fetchJob);
+    }
+
+    if (fetchJob.timeToFetchAgain) { 
+      resourceFetchJobPusher.send(JSON.stringify(fetchJob));
+    } else {
+      delete fetchJobs[fetchJob.resource.id];
+    }
+  });
+
+  function publishResourceReceived(fetchJob) {
+    log.silly('Master sending updated data of ' + fetchJob.resource.id + ' to web socket server.');
+
+    resourceUpdatedPublisher.send(JSON.stringify(fetchJob.resource.data));
   }
 
-  resourceVersions[resourceId] = resourceDefaultVersion;
+  /**
+   * Forking worker processes
+   */
+  const totalWorkerCount = 1;
 
-  console.log('Successfully added resource (id: %s) to the fetchlist. Current fetchlist:', resourceId);
-  console.log(JSON.stringify(resourceVersions, null, 4));
-
-  // trigger a fetch
-  process.nextTick(function() {
-      fetchResource(resourceId, releaseFetchJobLock);
-  });  
-
-  res.statusCode = 200;
-  res.send('Success');  
-}
-
-var fetchResource = function (resourceId, callback) { 
-  fetchDataRequestOptions.path = '/' + resourceId;
-  
-  console.log('[BEGIN %s] Fetching datafrom %s:%s', resourceId, dataProviderHost, dataProviderPort);
-
-  var handleReceivedResource = function(res) {
-    var updatedResourceInJSON = '';
-    res.setEncoding('utf8');
-
-    // Append data as we receive it 
-    res.on('data', function (chunk) {
-      updatedResourceInJSON += chunk;
-      console.log('Received some data from data source: %s', updatedResourceInJSON);
-    });
-
-      // When all data is received, check its version and broadcast it if received version is greater
-    res.on('end', function() {
-      var updatedResource;
-      try {
-        updatedResource = JSON.parse(updatedResourceInJSON);
-      } catch (e) {
-        console.error('Did not receive proper JSON object from data provider for resource %s', resourceId);
-        return;
-      }
-
-      var existingVersion = resourceVersions[resourceId];
-      var newVersion = updatedResource.version;
-
-      // if there is verson information, compare the versions and broadcast if data is newer
-      if (isNumber(existingVersion) && isNumber(newVersion) && newVersion > existingVersion) {
-        console.log('Changes detected for resource %s, current version is %s, new version is %s with a max age of %s miliseconds', 
-          resourceId, existingVersion, newVersion, updatedResource.maxAgeInMilis);  
-
-        resourceVersions[resourceId] = updatedResource.version; // update the version
-        
-        broadcastResourceData(updatedResource, resourceId);
-        
-      } else if (isNumber(existingVersion) && isNumber(newVersion) && newVersion <= existingVersion){
-        console.log('No changes detected for resource %s, current version is %s, new version is %s', 
-          resourceId, existingVersion, newVersion);  
-      } else {
-        console.warn('No valid version information detected (current: %s, new: %s), broadcasting the data.',
-          existingVersion, newVersion);
-        broadcastResourceData(updatedResource, resourceId);
-      }
-
-      console.log('All data for resource %s has been received', resourceId);
-
-      // if the resource is termianted, remove it from the list
-      if (updatedResource.terminated === true) {
-        console.log('Resource appears to be terminated, removing it from the list');
-        delete resourceVersions[resourceId];
-      } else {
-        var maxAgeForThisResourceInMilis = updatedResource.maxAgeInMilis ? updatedResource.maxAgeInMilis : defaultResourceMaxAgeInMilis;
-
-        setTimeout(function fetchThisResourceRecursively() {
-          fetchResource(resourceId, null);
-        }, maxAgeForThisResourceInMilis); 
-      }
-
-      if (callback) {
-        callback();
-      }
-    });
-
-    res.on('error', function(e) {
-      fetchJobLocked = false; 
-      console.error('Can not parse resource data: %s', e.message);
-    });
+  for (let i = 0; i < totalWorkerCount; i++) {
+    cluster.fork();
   }
 
-  http.get(fetchDataRequestOptions, handleReceivedResource).on('error', releaseFetchJobLock); 
-}
+  // Histen for workers to come online
+  cluster.on('online', function(worker) {
+    log.info('Worker ' + worker.process.pid + ' is online.');
+  });
 
-var releaseFetchJobLock = function(err) {
-  if (err) {
-    console.error('[ERROR] Cant fetch resource data: %s', err);  
-  } 
+  // Handle dead workers
+  cluster.on('death', function(worker) {
+    log.warn('Worker ' + worker.process.pid + ' died');
+  });
+
+  // Handle application termination
+  process.on('SIGINT', function() {
+    resourceRequiredSubscriber.close();
+    resourceUpdatedPublisher.close();
+    resourceFetchJobPusher.close();
+    resourceFetchJobResultPuller.close();
+    process.exit();
+  });
+
+} else {
+
+  /**
+   * Worker process
+   */
+  // Pull resource fetch jobs from the master 
+  const resourceFetchJobPuller = zmq.socket('pull').connect('ipc://resource-fetch-job-pusher.ipc');
+  // Push resource fetch result (ie. resource data) to master
+  const resourceFetchJobResultPusher = zmq.socket('push').connect('ipc://resource-fetch-job-result-puller.ipc');
+
+  // Receive fetch jobs from the master
+  resourceFetchJobPuller.on('message', function (message) {
+    var fetchJob = JSON.parse(message);
+
+    log.silly('Worker ' + process.pid + ' received a fetch job for resource ' + fetchJob.resource.id);
+
+    if (fetchJob.timeToFetchAgain <= Date.now()) { 
+      fetchResource(fetchJob.resource.id);
+    } else {
+      fetchJob.result = RETRY_FETCHING;
+
+      resourceFetchJobResultPusher.send(JSON.stringify(fetchJob));
+    }
+  });
+
+  function fetchResource(resourceId) {
+    var resourceURL = '/' + resourceId;
+
+    var httpGetOptions = {
+      host: DATA_PROVIDER_HOST,
+      port: DATA_PROVIDER_PORT,
+      method: 'GET',
+      path: resourceURL
+    };
+
+    log.http('Worker ' + process.pid + ' requested resource ' + resourceId + ' from datafetcher ' + 
+      DATA_PROVIDER_HOST + DATA_PROVIDER_PORT + resourceURL);
+
+    http.get(httpGetOptions, function (response) {
+      resourceReceived(resourceId, response);
+    }); 
     
-  fetchJobLocked = false; 
-  console.log('[COMPLETE] Data fetch is complete'); 
+    return; 
+  }
+
+  function resourceReceived(resourceId, response) {
+    var responseBody = '';
+    response.setEncoding('utf8');
+
+    response.on('data', function (chunk) {
+      responseBody += chunk;
+    });
+
+    response.on('end', function() {
+
+      log.http('Worker ' + process.pid + ' received new resource data for resource ' + 
+        resourceId + ': ' + responseBody);
+
+      var lastModified = getLastModifiedFromResponse(response);
+      var maxAge = getMaxAgeFromResponse(response);
+
+      fetchJobs[resourceId] = {
+        resource : {
+          id : resourceId,
+          data : JSON.parse(responseBody)
+        },
+        result : RESOURCE_FETCHED,
+        timeToFetchAgain : maxAge > 0 ? lastModified + maxAge : null
+      };
+
+      resourceFetchJobResultPusher.send(JSON.stringify(fetchJobs[resourceId]));      
+    });
+  }
+
+  // Handle application termination
+  process.on('SIGINT', function() {
+    resourceFetchJobPuller.close();
+    resourceFetchJobResultPusher.close();
+    process.exit();
+  });
+
 }
 
-function isEmpty(obj) {
-    return Object.keys(obj).length === 0;
+function getLastModifiedFromResponse(response) {
+  var lastModifiedHeader = response.headers['last-modified'];
+
+  return lastModifiedHeader ? Date.parse(lastModifiedHeader) : 0;
 }
 
-function isNumber(n) {
-  return !isNaN(parseFloat(n)) && isFinite(n);
+function getMaxAgeFromResponse(response) {
+  var cacheControlHeader = response.headers['cache-control'];
+  var maxAge = getPropertyValueFromResponseHeader(cacheControlHeader, 'max-age');
+
+  return (maxAge ? maxAge : DEFAULT_MAX_AGE) * 1000;
+}
+
+function getPropertyValueFromResponseHeader(responseHeaderValue, propertyName) {
+  var indexOfProperty = responseHeaderValue.indexOf(propertyName);
+
+  return responseHeaderValue.substring(propertyName.length + 1, responseHeaderValue.length + 1);
 }

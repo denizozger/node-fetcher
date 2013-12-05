@@ -1,17 +1,24 @@
 {
   "name": "node-fetcher",
-  "description": "An app that fetches data from an API periodically, and broadcasts it",
+  "description": "An app that fetches data from an API periodically, and publishes it",
   "version": "0.0.1",
+  "author": "Deniz Ozger <denizozger@gmail.com>",
+  "repository": {
+    "type": "git",
+    "url": "git://github.com/denizozger/node-fetcher.git"
+  },
   "dependencies": {
     "express": "3.x",
     "async": "0.2.x",
     "request": "2.27.x",
-    "underscore": "1.5.x",
-    "nodetime": "0.8.x",
-    "memwatch": "0.2.x"
+    "zmq": "~2.5.1",
+    "npmlog": "0.0.6"
   },
   "engines": {
     "node": "0.10.x",
     "npm": "1.2.x"
+  },
+  "scripts": {
+    "start": "node --harmony ./server.js"
   }
 }
