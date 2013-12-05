@@ -1,4 +1,4 @@
-# Node Fetcher [ ![Codeship Status for denizozger/node-fetcher](https://www.codeship.io/projects/09cdfe10-2e0f-0131-709f-26f2c1e2a692/status?branch=master)](https://www.codeship.io/projects/9380)
+# Node Fetcher 
 
 This Node application receives some data requests from another server, periodically checks an API for new data, and as new data is received, publishes it to requesting server.
 
@@ -6,34 +6,26 @@ This Node application receives some data requests from another server, periodica
 
 ``` bash
 npm install
-foreman start
+node --harmony start
 ```
 
 ## How it works
 
-Some code that connects to an API runs in an infinite loop.
+Please see [node-socketio](https://github.com/denizozger/node-socketio) and [node-dataprovider](https://github.com/denizozger/node-dataprovider) implementations too, all three applications work together - although not necessarily.
 
-1. Listens to HTTP GETs to /fetchlist/new/some-key.
-2. Adds some-key to key list on memory
-3. The periodic job goes over key list, and requests JSON data from another API (ie. http://data-provider/some-key)
-4. If there is version information, checks the version to determine if data is new
-5. If "terminated" flag is on, removes some-key from the key list
-6. Transmits new data to the server which issued HTTP GET /fetchlist/new/some-key on step 1
+1. Subscribes to a publisher ([node-socketio](https://github.com/denizozger/node-socketio)), listening for requests
+2. Pushes the new request into an IPC loop between master process and workers.
+3. Worker pulls the request
+4. Worker makes an HTTP GET request to an API providing data in JSON ([node-dataprovider](https://github.com/denizozger/node-dataprovider))
+5. When the worker receives HTTP response, it pushes the data to master process via a different IPC
+6. Master pulls the data and publishes it to a web socket server ([node-socketio](https://github.com/denizozger/node-socketio)), and decides to keep the resouce in the loop or not
 
-![Schema](http://i39.tinypic.com/2hnrght.png)
-
-Please see [node-websocket](https://github.com/denizozger/node-websocket) and [node-dataprovider](https://github.com/denizozger/node-dataprovider) implementations too. You can either set these up on your local, or use the deployed apps running on Heroku. See project homepages for Heroku URLs.
-
-If you setup the other three projects, you should start node-fetcher as:
+When you have all three applications, you should start node-fetcher as:
 
 ``` bash
-PORT=4000 DATA_REQUESTING_SERVER_URL=http://localhost:5000/broadcast/ DATA_PROVIDER_HOST=localhost DATA_PROVIDER_PORT=3000 foreman start
+PORT=5000 FETCHER_ADDRESS='http://localhost:4000/fetchlist/new/' NODE_ENV=development nodemon --harmony ~/Projects/node-socketio/server.js
 ```
 
-Adding keys to the key list that fetcher gets data from, when it connects to [node-dataprovider](https://github.com/denizozger/node-dataprovider)/some-key.
-``` bash
-curl -X GET http://localhost:4000/fetchlist/new/7 -H "Authorization:ZzN0bTMxbg=="
-```
+Go to [localhost:5000/?matchesfeed/8/matchcentre](localhost:5000/?matchesfeed/8/matchcentre) for a demo
 
 [![Bitdeli Badge](https://d2weczhvl823v0.cloudfront.net/denizozger/node-fetcher/trend.png)](https://bitdeli.com/free "Bitdeli Badge")
-
