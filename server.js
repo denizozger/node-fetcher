@@ -1,46 +1,26 @@
 'use strict';
 
-const express = require('express'),
-  app = express(),
-  http = require('http'),
-  request = require('request'),
+const 
   zmq = require('zmq'),
   cluster = require('cluster'),
   log = require('npmlog');
 
-app.use(express.logger('dev'));
-
-var port = process.env.PORT || 4000;
-
-const DEFAULT_MAX_AGE = 5;
-const DATA_REQUESTING_SERVER_URL = process.env.DATA_REQUESTING_SERVER_URL || 'http://node-socketio.herokuapp.com/broadcast/';
+const DATA_REQUESTING_SERVER_URL = process.env.DATA_REQUESTING_SERVER_URL;
 const DATA_PROVIDER_HOST = process.env.DATA_PROVIDER_HOST || 'node-dataprovider.herokuapp.com';
 const DATA_PROVIDER_PORT = process.env.DATA_PROVIDER_PORT || 80;
-const AUTHORIZATION_HEADER_KEY = 'bm9kZS13ZWJzb2NrZXQ=';
-const WEB_SOCKET_SERVER_AUTHORIZATION_HEADER_KEY = 'bm9kZS1mZXRjaGVy';
-const LOGGING_LEVEL = process.env.LOGGING_LEVEL || 'verbose';
-const RETRY_FETCHING = 'retry';
-const RESOURCE_FETCHED = 'fetched';
+const TO_FETCH = 'to-fetch';
+const FETCHED = 'fetched';
+const DEFAULT_MAX_AGE = 5;
 
-log.level = LOGGING_LEVEL;
-
-var socketErrorHandler = function (error) {
-    if (error) {
-      log.error(error);
-      throw Error(error);
-    }
-};
-
-var fetchJobs = {}; // key = resourceId, value = job details & resource data
+log.level = process.env.LOGGING_LEVEL || 'verbose';
 
 /**
  * Master process
  */
 if (cluster.isMaster) {
+  log.info('Master ' + process.pid +' is online.')
 
-  app.listen(port, function() {
-    log.info('Server ' + process.pid + ' listening on', port);
-  });
+  var fetchJobs = {}; // key = resourceId, value = job
 
   // Receive resource required messages from WebSocketServer
   const resourceRequiredSubscriber = zmq.socket('sub').connect('tcp://localhost:5432');
@@ -52,7 +32,6 @@ if (cluster.isMaster) {
   const resourceFetchJobPusher = zmq.socket('push').bind('ipc://resource-fetch-job-pusher.ipc', socketErrorHandler);
   // Pull the result of fetch jobs (ie. resource data)
   const resourceFetchJobResultPuller = zmq.socket('pull').bind('ipc://resource-fetch-job-result-puller.ipc', socketErrorHandler);
-
 
   resourceRequiredSubscriber.on('message', function (message) {
       handleResourceRequested(message);     
@@ -67,10 +46,9 @@ if (cluster.isMaster) {
     }
 
     var fetchJob = {
-      resource : {
-        id: resourceId,
-        data: null
-      },
+      id: resourceId,
+      data: null,
+      status: TO_FETCH,
       timeToFetchAgain : Date.now()
     };
 
@@ -84,31 +62,32 @@ if (cluster.isMaster) {
   resourceFetchJobResultPuller.on('message', function (data) {
     var fetchJob = JSON.parse(data);
 
-    log.silly('Master received new resource: ' + JSON.stringify(fetchJob));  
+    log.silly('Master pulled new resource: ' + JSON.stringify(fetchJob));  
 
-    if (fetchJob.result === RESOURCE_FETCHED) {
+    if (fetchJob.status === FETCHED) {
       publishResourceReceived(fetchJob);
     }
 
     if (fetchJob.timeToFetchAgain) { 
+      fetchJob.data = null;
+
       resourceFetchJobPusher.send(JSON.stringify(fetchJob));
     } else {
-      delete fetchJobs[fetchJob.resource.id];
+      delete fetchJobs[fetchJob.id];
     }
   });
 
   function publishResourceReceived(fetchJob) {
-    log.silly('Master sending updated data of ' + fetchJob.resource.id + ' to web socket server.');
+    log.silly('Master sending updated data of ' + fetchJob.id + ' to web socket server.');
 
-    resourceUpdatedPublisher.send(JSON.stringify(fetchJob.resource.data));
+    resourceUpdatedPublisher.send(JSON.stringify({id: fetchJob.id, data: fetchJob.data}));
   }
 
   /**
    * Forking worker processes
    */
-  const totalWorkerCount = 1;
-
-  for (let i = 0; i < totalWorkerCount; i++) {
+  const numCPUs = require('os').cpus().length;
+  for (let i = 0; i < numCPUs; i++) {
     cluster.fork();
   }
 
@@ -118,24 +97,28 @@ if (cluster.isMaster) {
   });
 
   // Handle dead workers
-  cluster.on('death', function(worker) {
-    log.warn('Worker ' + worker.process.pid + ' died');
+  cluster.on('exit', function(worker, code, signal) {
+    log.warn('Worker ' + worker.process.pid + ' died. Forking a new one..');
+    this.fork();
   });
 
-  // Handle application termination
-  process.on('SIGINT', function() {
+  process.on('uncaughtException', function (err) {
+    log.error('Master process failed, gracefully closing connections: ' + err.stack);    
     resourceRequiredSubscriber.close();
     resourceUpdatedPublisher.close();
     resourceFetchJobPusher.close();
     resourceFetchJobResultPuller.close();
-    process.exit();
-  });
+  }); 
 
 } else {
 
   /**
    * Worker process
    */
+  const 
+    http = require('http'),
+    request = require('request');
+
   // Pull resource fetch jobs from the master 
   const resourceFetchJobPuller = zmq.socket('pull').connect('ipc://resource-fetch-job-pusher.ipc');
   // Push resource fetch result (ie. resource data) to master
@@ -145,12 +128,12 @@ if (cluster.isMaster) {
   resourceFetchJobPuller.on('message', function (message) {
     var fetchJob = JSON.parse(message);
 
-    log.silly('Worker ' + process.pid + ' received a fetch job for resource ' + fetchJob.resource.id);
+    log.silly('Worker ' + process.pid + ' received a fetch job for resource ' + fetchJob.id);
 
     if (fetchJob.timeToFetchAgain <= Date.now()) { 
-      fetchResource(fetchJob.resource.id);
+      fetchResource(fetchJob.id);
     } else {
-      fetchJob.result = RETRY_FETCHING;
+      fetchJob.status = TO_FETCH;
 
       resourceFetchJobResultPusher.send(JSON.stringify(fetchJob));
     }
@@ -171,9 +154,10 @@ if (cluster.isMaster) {
 
     http.get(httpGetOptions, function (response) {
       resourceReceived(resourceId, response);
-    }); 
-    
-    return; 
+    }).on('error', function(error) {
+      log.error('Worker ' + process.pid + ' cant request resource ' + resourceId + ' :' + error.stack);     
+      removeJobFromTheQueue({id : resourceId});
+    });
   }
 
   function resourceReceived(resourceId, response) {
@@ -186,38 +170,46 @@ if (cluster.isMaster) {
 
     response.on('end', function() {
 
-      log.http('Worker ' + process.pid + ' received new resource data for resource ' + 
-        resourceId + ': ' + responseBody);
+      if (response.statusCode === 200) {
+        log.http('Worker ' + process.pid + ' received new resource data for resource ' + 
+        resourceId);
 
-      var lastModified = getLastModifiedFromResponse(response);
-      var maxAge = getMaxAgeFromResponse(response);
+        var lastModified = getLastModifiedFromResponse(response);
+        var maxAge = getMaxAgeFromResponse(response);
 
-      fetchJobs[resourceId] = {
-        resource : {
+        var fetchJob = {
           id : resourceId,
-          data : JSON.parse(responseBody)
-        },
-        result : RESOURCE_FETCHED,
-        timeToFetchAgain : maxAge > 0 ? lastModified + maxAge : null
-      };
+          data: responseBody,
+          status : FETCHED,
+          timeToFetchAgain : maxAge > 0 ? lastModified + maxAge : null
+        };
 
-      resourceFetchJobResultPusher.send(JSON.stringify(fetchJobs[resourceId]));      
+        resourceFetchJobResultPusher.send(JSON.stringify(fetchJob)); 
+      } else {
+        log.warn('Bad response (' + response.statusCode + ' ' + 
+          http.STATUS_CODES[response.statusCode] + ') for resource (' + resourceId + ')');
+        
+        removeJobFromTheQueue({id : resourceId});
+      }           
     });
   }
 
-  // Handle application termination
-  process.on('SIGINT', function() {
-    resourceFetchJobPuller.close();
-    resourceFetchJobResultPusher.close();
-    process.exit();
-  });
+  function removeJobFromTheQueue(fetchJob) {
+    log.warn('Removing ' + fetchJob.id + ' from the fetch job list');
 
+    fetchJob.timeToFetchAgain = null;
+    resourceFetchJobResultPusher.send(JSON.stringify(fetchJob));
+  }
+
+  process.on('uncaughtException', function (err) {
+    log.error('Worker ' + process.pid + ' got an error: ' + err.stack + ', the job it was working on is lost');    
+  }); 
 }
 
 function getLastModifiedFromResponse(response) {
   var lastModifiedHeader = response.headers['last-modified'];
 
-  return lastModifiedHeader ? Date.parse(lastModifiedHeader) : 0;
+  return lastModifiedHeader ? Date.parse(lastModifiedHeader) : Date.now();
 }
 
 function getMaxAgeFromResponse(response) {
@@ -228,7 +220,18 @@ function getMaxAgeFromResponse(response) {
 }
 
 function getPropertyValueFromResponseHeader(responseHeaderValue, propertyName) {
-  var indexOfProperty = responseHeaderValue.indexOf(propertyName);
+  if (responseHeaderValue) {
+    var indexOfProperty = responseHeaderValue.indexOf(propertyName);
 
-  return responseHeaderValue.substring(propertyName.length + 1, responseHeaderValue.length + 1);
+    return responseHeaderValue.substring(propertyName.length + 1, responseHeaderValue.length + 1);
+  } 
+  
+  return '';
 }
+
+var socketErrorHandler = function (err) {
+    if (err) {
+      log.error('Socket connection error: ' + err.stack);
+      throw Error(err);
+    }
+};
