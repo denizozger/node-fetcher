@@ -21,6 +21,8 @@ if (cluster.isMaster) {
   log.info('Master ' + process.pid +' is online.')
 
   var fetchJobs = {}; // key = resourceId, value = job
+  const totalWorkerCount = require('os').cpus().length;
+  var readyWorkerCount = 0;
 
   // Receive resource required messages from WebSocketServer
   const resourceRequiredSubscriber = zmq.socket('sub').connect('tcp://localhost:5432');
@@ -54,14 +56,34 @@ if (cluster.isMaster) {
 
     fetchJobs[resourceId] = fetchJob;
 
-    resourceFetchJobPusher.send(JSON.stringify(fetchJob));  
+    if (areAllWorkersReady()) {
+      resourceFetchJobPusher.send(JSON.stringify(fetchJob));  
 
-    log.silly('Pushed a fetch job for ' + fetchJob.id);
+      log.silly('Pushed a fetch job for ' + fetchJob.id);
+    }
   }
 
   resourceFetchJobResultPuller.on('message', function (data) {
-    var fetchJob = JSON.parse(data);
+    handleMessageFromWorker(data); 
+  });
 
+  function handleMessageFromWorker(data) {
+    var message = JSON.parse(data);
+
+    if (message.ready) {
+      readyWorkerCount += 1;
+      log.info('Worker ' + message.pid + ' is ready. (' + 
+        readyWorkerCount + ' out of ' + totalWorkerCount + ')');
+
+      if (areAllWorkersReady()) {
+        pushAllJobs();
+      }
+    } else {
+      handleResourceFetchJobResult(message);
+    }
+  }
+
+  function handleResourceFetchJobResult(fetchJob) {
     log.silly('Master pulled new resource: ' + JSON.stringify(fetchJob));  
 
     if (fetchJob.status === FETCHED) {
@@ -75,7 +97,19 @@ if (cluster.isMaster) {
     } else {
       delete fetchJobs[fetchJob.id];
     }
-  });
+  }
+
+  function pushAllJobs() {
+    log.silly('Pushing all jobs');
+
+    for (var fetchJobId in fetchJobs) {
+      if (fetchJobs.hasOwnProperty(fetchJobId)) {
+        resourceFetchJobPusher.send(JSON.stringify(fetchJobs[fetchJobId]));  
+
+        log.silly('Pushed a fetch job for ' + fetchJobs[fetchJobId]);   
+      }
+    }
+  }
 
   function publishResourceReceived(fetchJob) {
     log.silly('Master sending updated data of ' + fetchJob.id + ' to web socket server.');
@@ -86,9 +120,9 @@ if (cluster.isMaster) {
   /**
    * Forking worker processes
    */
-  const numCPUs = require('os').cpus().length;
-  for (let i = 0; i < numCPUs; i++) {
-    cluster.fork();
+  
+  for (let i = 0; i < totalWorkerCount; i++) {
+    cluster.fork();  
   }
 
   // Histen for workers to come online
@@ -101,6 +135,10 @@ if (cluster.isMaster) {
     log.warn('Worker ' + worker.process.pid + ' died. Forking a new one..');
     this.fork();
   });
+
+  function areAllWorkersReady() {
+    return readyWorkerCount === totalWorkerCount;
+  }
 
   process.on('uncaughtException', function (err) {
     log.error('Master process failed, gracefully closing connections: ' + err.stack);    
@@ -150,7 +188,7 @@ if (cluster.isMaster) {
     };
 
     log.http('Worker ' + process.pid + ' requested resource ' + resourceId + ' from datafetcher ' + 
-      DATA_PROVIDER_HOST + DATA_PROVIDER_PORT + resourceURL);
+      DATA_PROVIDER_HOST + ':' + DATA_PROVIDER_PORT + resourceURL);
 
     http.get(httpGetOptions, function (response) {
       resourceReceived(resourceId, response);
@@ -200,6 +238,12 @@ if (cluster.isMaster) {
     fetchJob.timeToFetchAgain = null;
     resourceFetchJobResultPusher.send(JSON.stringify(fetchJob));
   }
+
+  // signal ready
+  resourceFetchJobResultPusher.send(JSON.stringify({
+    ready: true,
+    pid: process.pid
+  }));
 
   process.on('uncaughtException', function (err) {
     log.error('Worker ' + process.pid + ' got an error: ' + err.stack + ', the job it was working on is lost');    
