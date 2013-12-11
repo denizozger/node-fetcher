@@ -36,7 +36,7 @@ if (cluster.isMaster) {
   const resourceFetchJobResultPuller = zmq.socket('pull').bind('ipc://resource-fetch-job-result-puller.ipc', socketErrorHandler);
 
   resourceRequiredSubscriber.on('message', function (message) {
-      handleResourceRequested(message);     
+      handleResourceRequested(message);    
   });
 
   function handleResourceRequested(message) {
@@ -140,13 +140,23 @@ if (cluster.isMaster) {
     return readyWorkerCount === totalWorkerCount;
   }
 
-  process.on('uncaughtException', function (err) {
-    log.error('Master process failed, gracefully closing connections: ' + err.stack);    
+  function closeAllSockets() {
     resourceRequiredSubscriber.close();
     resourceUpdatedPublisher.close();
     resourceFetchJobPusher.close();
     resourceFetchJobResultPuller.close();
+  }
+
+  process.on('uncaughtException', function (err) {
+    log.error('Master process failed, gracefully closing connections: ' + err.stack);    
+    closeAllSockets();
+    process.exit(1);
   }); 
+
+  process.on('SIGINT', function() {
+    closeAllSockets();
+    process.exit();
+  });
 
 } else {
 
@@ -164,6 +174,10 @@ if (cluster.isMaster) {
 
   // Receive fetch jobs from the master
   resourceFetchJobPuller.on('message', function (message) {
+    handleNewFetchJob(message);
+  });
+
+  function handleNewFetchJob(message) {
     var fetchJob = JSON.parse(message);
 
     log.silly('Worker ' + process.pid + ' received a fetch job for resource ' + fetchJob.id);
@@ -174,8 +188,8 @@ if (cluster.isMaster) {
       fetchJob.status = TO_FETCH;
 
       resourceFetchJobResultPusher.send(JSON.stringify(fetchJob));
-    }
-  });
+    } 
+  }
 
   function fetchResource(resourceId) {
     var resourceURL = '/' + resourceId;
@@ -239,6 +253,34 @@ if (cluster.isMaster) {
     resourceFetchJobResultPusher.send(JSON.stringify(fetchJob));
   }
 
+  function getLastModifiedFromResponse(response) {
+    var lastModifiedHeader = response.headers['last-modified'];
+
+    return lastModifiedHeader ? Date.parse(lastModifiedHeader) : Date.now();
+  }
+
+  function getMaxAgeFromResponse(response) {
+    var cacheControlHeader = response.headers['cache-control'];
+    var maxAge = getPropertyValueFromResponseHeader(cacheControlHeader, 'max-age');
+
+    return (maxAge ? maxAge : DEFAULT_MAX_AGE) * 1000;
+  }
+
+  function getPropertyValueFromResponseHeader(responseHeaderValue, propertyName) {
+    if (responseHeaderValue) {
+      var indexOfProperty = responseHeaderValue.indexOf(propertyName);
+
+      return responseHeaderValue.substring(propertyName.length + 1, responseHeaderValue.length + 1);
+    } 
+    
+    return '';
+  }
+
+  function closeAllSockets() {
+    resourceFetchJobPuller.close();
+    resourceFetchJobResultPusher.close(); 
+  }
+
   // signal ready
   resourceFetchJobResultPusher.send(JSON.stringify({
     ready: true,
@@ -246,31 +288,15 @@ if (cluster.isMaster) {
   }));
 
   process.on('uncaughtException', function (err) {
-    log.error('Worker ' + process.pid + ' got an error: ' + err.stack + ', the job it was working on is lost');    
+    log.error('Worker ' + process.pid + ' got an error, the job it was working on is lost: ' + err.stack);    
+    closeAllSockets();
+    process.exit(1);
   }); 
-}
 
-function getLastModifiedFromResponse(response) {
-  var lastModifiedHeader = response.headers['last-modified'];
-
-  return lastModifiedHeader ? Date.parse(lastModifiedHeader) : Date.now();
-}
-
-function getMaxAgeFromResponse(response) {
-  var cacheControlHeader = response.headers['cache-control'];
-  var maxAge = getPropertyValueFromResponseHeader(cacheControlHeader, 'max-age');
-
-  return (maxAge ? maxAge : DEFAULT_MAX_AGE) * 1000;
-}
-
-function getPropertyValueFromResponseHeader(responseHeaderValue, propertyName) {
-  if (responseHeaderValue) {
-    var indexOfProperty = responseHeaderValue.indexOf(propertyName);
-
-    return responseHeaderValue.substring(propertyName.length + 1, responseHeaderValue.length + 1);
-  } 
-  
-  return '';
+  process.on('SIGINT', function() {
+    closeAllSockets();
+    process.exit();
+  });
 }
 
 var socketErrorHandler = function (err) {
