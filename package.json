@@ -10,7 +10,7 @@
   "dependencies": {
     "express": "3.x",
     "async": "0.2.x",
-    "request": "2.27.x",
+    "request": "~2.27.0",
     "zmq": "~2.5.1",
     "npmlog": "0.0.6"
   },

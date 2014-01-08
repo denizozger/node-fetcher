@@ -18,17 +18,20 @@ log.level = process.env.LOGGING_LEVEL || 'verbose';
  * Master process
  */
 if (cluster.isMaster) {
-  log.info('Master ' + process.pid +' is online.')
+  log.info('Master ' + process.pid +' is online.');
+
+  const request = require('request');
+  var bigMatchData = JSON.stringify(require('./match.json'));
 
   var fetchJobs = {}; // key = resourceId, value = job
   const totalWorkerCount = require('os').cpus().length;
   var readyWorkerCount = 0;
 
   // Receive resource required messages from WebSocketServer
-  const resourceRequiredSubscriber = zmq.socket('sub').connect('tcp://localhost:5432');
-  resourceRequiredSubscriber.subscribe('');
+  const resourceRequiredSubscriber = zmq.socket('pull').connect('tcp://localhost:5432');
+  // resourceRequiredSubscriber.subscribe('');
   // Publish resource data to WebSocketServer
-  const resourceUpdatedPublisher = zmq.socket('pub').bind('tcp://*:5433', socketErrorHandler);
+  const resourceUpdatedPublisher = zmq.socket('push').bind('tcp://*:5433', socketErrorHandler);
 
   // Push resource fetch jobs to workers
   const resourceFetchJobPusher = zmq.socket('push').bind('ipc://resource-fetch-job-pusher.ipc', socketErrorHandler);
@@ -96,6 +99,7 @@ if (cluster.isMaster) {
       resourceFetchJobPusher.send(JSON.stringify(fetchJob));
     } else {
       delete fetchJobs[fetchJob.id];
+      fetchJob = null;
     }
   }
 
@@ -125,7 +129,7 @@ if (cluster.isMaster) {
     cluster.fork();  
   }
 
-  // Histen for workers to come online
+  // Listen for workers to come online
   cluster.on('online', function(worker) {
     log.info('Worker ' + worker.process.pid + ' is online.');
   });
@@ -302,6 +306,6 @@ if (cluster.isMaster) {
 var socketErrorHandler = function (err) {
     if (err) {
       log.error('Socket connection error: ' + err.stack);
-      throw Error(err);
+      throw new Error(err);
     }
 };
