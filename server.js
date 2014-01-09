@@ -21,7 +21,6 @@ if (cluster.isMaster) {
   log.info('Master ' + process.pid +' is online.');
 
   const request = require('request');
-  var bigMatchData = JSON.stringify(require('./match.json'));
 
   var fetchJobs = {}; // key = resourceId, value = job
   const totalWorkerCount = require('os').cpus().length;
@@ -29,7 +28,6 @@ if (cluster.isMaster) {
 
   // Receive resource required messages from WebSocketServer
   const resourceRequiredSubscriber = zmq.socket('pull').connect('tcp://localhost:5432');
-  // resourceRequiredSubscriber.subscribe('');
   // Publish resource data to WebSocketServer
   const resourceUpdatedPublisher = zmq.socket('push').bind('tcp://*:5433', socketErrorHandler);
 
