@@ -23,7 +23,7 @@ Please see [node-socketio](https://github.com/denizozger/node-socketio) and [nod
 When you have all three applications, you should start node-fetcher as:
 
 ``` bash
-PORT=5000 FETCHER_ADDRESS='http://localhost:4000/fetchlist/new/' NODE_ENV=development node --harmony server.js
+PORT=4000 DATA_REQUESTING_SERVER_URL=http://localhost:5000/broadcast/ DATA_PROVIDER_HOST=localhost DATA_PROVIDER_PORT=3000 node --harmony server.js
 ```
 
 [![Bitdeli Badge](https://d2weczhvl823v0.cloudfront.net/denizozger/node-fetcher/trend.png)](https://bitdeli.com/free "Bitdeli Badge")
