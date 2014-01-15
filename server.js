@@ -5,7 +5,6 @@ const
   cluster = require('cluster'),
   log = require('npmlog');
 
-const DATA_REQUESTING_SERVER_URL = process.env.DATA_REQUESTING_SERVER_URL;
 const DATA_PROVIDER_HOST = process.env.DATA_PROVIDER_HOST || 'node-dataprovider.herokuapp.com';
 const DATA_PROVIDER_PORT = process.env.DATA_PROVIDER_PORT || 80;
 const TO_FETCH = 'to-fetch';
