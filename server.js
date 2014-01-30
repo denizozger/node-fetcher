@@ -5,8 +5,8 @@ const
   cluster = require('cluster'),
   log = require('npmlog');
 
-const DATA_PROVIDER_HOST = process.env.DATA_PROVIDER_HOST || 'node-dataprovider.herokuapp.com';
-const DATA_PROVIDER_PORT = process.env.DATA_PROVIDER_PORT || 80;
+const DATA_PROVIDER_HOST = process.env.DATA_PROVIDER_HOST || 'localhost';
+const DATA_PROVIDER_PORT = process.env.DATA_PROVIDER_PORT || 3000;
 const TO_FETCH = 'to-fetch';
 const FETCHED = 'fetched';
 const DEFAULT_MAX_AGE = 5;
