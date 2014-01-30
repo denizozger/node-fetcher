@@ -15,27 +15,27 @@ log.level = process.env.LOGGING_LEVEL || 'verbose';
 
 /**
  * Master process
- */
+ */ 
 if (cluster.isMaster) {
   log.info('Master ' + process.pid +' is online.');
 
-  const request = require('request');
+  const request = require('request'); 
 
   var fetchJobs = {}; // key = resourceId, value = job
   const totalWorkerCount = require('os').cpus().length;
   var readyWorkerCount = 0;
 
   // Receive resource required messages from WebSocketServer
-  const resourceRequiredSubscriber = zmq.socket('pull').connect('tcp://localhost:5432');
+  const resourceRequiredPuller = zmq.socket('pull').connect('tcp://localhost:5432');
   // Publish resource data to WebSocketServer
-  const resourceUpdatedPublisher = zmq.socket('push').bind('tcp://*:5433', socketErrorHandler);
+  const resourceUpdatedPublisher = zmq.socket('pub').bind('tcp://*:5433', socketErrorHandler);
 
   // Push resource fetch jobs to workers
   const resourceFetchJobPusher = zmq.socket('push').bind('ipc://resource-fetch-job-pusher.ipc', socketErrorHandler);
   // Pull the result of fetch jobs (ie. resource data)
   const resourceFetchJobResultPuller = zmq.socket('pull').bind('ipc://resource-fetch-job-result-puller.ipc', socketErrorHandler);
 
-  resourceRequiredSubscriber.on('message', function (message) {
+  resourceRequiredPuller.on('message', function (message) {
       handleResourceRequested(message);    
   });
 
@@ -60,6 +60,8 @@ if (cluster.isMaster) {
       resourceFetchJobPusher.send(JSON.stringify(fetchJob));  
 
       log.silly('Pushed a fetch job for ' + fetchJob.id);
+    } else {
+      // TODO implement
     }
   }
 
@@ -115,7 +117,11 @@ if (cluster.isMaster) {
   function publishResourceReceived(fetchJob) {
     log.silly('Master sending updated data of ' + fetchJob.id + ' to web socket server.');
 
-    resourceUpdatedPublisher.send(JSON.stringify({id: fetchJob.id, data: fetchJob.data}));
+    // resourceUpdatedPublisher.send(fetchJob.id + ':' + JSON.stringify({id: fetchJob.id, data: fetchJob.data}));
+    resourceUpdatedPublisher.send(fetchJob.id + ' ' + JSON.stringify({
+      id: fetchJob.id, 
+      data: fetchJob.data
+    }));
   }
 
   /**
@@ -133,7 +139,7 @@ if (cluster.isMaster) {
 
   // Handle dead workers
   cluster.on('exit', function(worker, code, signal) {
-    log.warn('Worker ' + worker.process.pid + ' died. Forking a new one..');
+    log.warn('Worker ' + worker.process.pid + ' died with code ' + code + '. Forking a new one..');
     this.fork();
   });
 
@@ -142,7 +148,7 @@ if (cluster.isMaster) {
   }
 
   function closeAllSockets() {
-    resourceRequiredSubscriber.close();
+    resourceRequiredPuller.close();
     resourceUpdatedPublisher.close();
     resourceFetchJobPusher.close();
     resourceFetchJobResultPuller.close();
@@ -155,6 +161,7 @@ if (cluster.isMaster) {
   }); 
 
   process.on('SIGINT', function() {
+    log.warn('Master | SIGINT detected, exiting gracefully.');
     closeAllSockets();
     process.exit();
   });
