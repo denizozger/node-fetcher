@@ -17,6 +17,7 @@ log.level = process.env.LOGGING_LEVEL || 'verbose';
  * Master process
  */ 
 if (cluster.isMaster) {
+
   log.info('Master ' + process.pid +' is online.');
 
   const request = require('request'); 
@@ -24,6 +25,7 @@ if (cluster.isMaster) {
   var fetchJobs = {}; // key = resourceId, value = job
   const totalWorkerCount = require('os').cpus().length;
   var readyWorkerCount = 0;
+  const fetchJobCheckFrequencyInMilis = 250;
 
   // Receive resource required messages from WebSocketServer
   const resourceRequiredPuller = zmq.socket('pull').connect('tcp://localhost:5432');
@@ -39,18 +41,40 @@ if (cluster.isMaster) {
       handleResourceRequested(message);    
   });
 
+  function pushJobsToWorkers() {
+    for (var fetchJobId in fetchJobs) {
+      if (fetchJobs.hasOwnProperty(fetchJobId) && areAllWorkersReady()) {
+        var fetchJob = fetchJobs[fetchJobId];
+
+        if (!fetchJob.timeToFetchAgain) {
+          delete fetchJobs[fetchJob.id];
+          fetchJob = null;
+        } else if (fetchJob.timeToFetchAgain <= Date.now()) { 
+          fetchJob.data = null;
+
+          resourceFetchJobPusher.send(JSON.stringify(fetchJob));
+        }   
+      }
+    }
+
+    setTimeout(function () {
+      pushJobsToWorkers();
+    }, fetchJobCheckFrequencyInMilis);
+  }
+
+  pushJobsToWorkers();
+
   function handleResourceRequested(message) {
     var resourceId = JSON.parse(message).id;
 
     if (fetchJobs[resourceId]) {
-      log.silly('This resource is in fetch queue already: ' + resourceId);
+      log.verbose('This resource is in fetch queue already: ' + resourceId);
       return;
     }
 
     var fetchJob = {
       id: resourceId,
       data: null,
-      status: TO_FETCH,
       timeToFetchAgain : Date.now()
     };
 
@@ -61,7 +85,7 @@ if (cluster.isMaster) {
 
       log.silly('Pushed a fetch job for ' + fetchJob.id);
     } else {
-      // TODO implement
+      // TODO do we really care?
     }
   }
 
@@ -88,18 +112,13 @@ if (cluster.isMaster) {
   function handleResourceFetchJobResult(fetchJob) {
     log.silly('Master pulled new resource: ' + JSON.stringify(fetchJob));  
 
-    if (fetchJob.status === FETCHED) {
-      publishResourceReceived(fetchJob);
-    }
+    publishResourceReceived(fetchJob);
 
-    if (fetchJob.timeToFetchAgain) { 
-      fetchJob.data = null;
+    fetchJob.data = null;
 
-      resourceFetchJobPusher.send(JSON.stringify(fetchJob));
-    } else {
-      delete fetchJobs[fetchJob.id];
-      fetchJob = null;
-    }
+    fetchJobs[fetchJob.id] = fetchJob;
+
+    var test = fetchJobs[fetchJob.id];
   }
 
   function pushAllJobs() {
@@ -115,9 +134,8 @@ if (cluster.isMaster) {
   }
 
   function publishResourceReceived(fetchJob) {
-    log.silly('Master sending updated data of ' + fetchJob.id + ' to web socket server.');
+    log.verbose('Master sending updated data of ' + fetchJob.id + ' to web socket server.');
 
-    // resourceUpdatedPublisher.send(fetchJob.id + ':' + JSON.stringify({id: fetchJob.id, data: fetchJob.data}));
     resourceUpdatedPublisher.send(fetchJob.id + ' ' + JSON.stringify({
       id: fetchJob.id, 
       data: fetchJob.data
@@ -190,13 +208,7 @@ if (cluster.isMaster) {
 
     log.silly('Worker ' + process.pid + ' received a fetch job for resource ' + fetchJob.id);
 
-    if (fetchJob.timeToFetchAgain <= Date.now()) { 
-      fetchResource(fetchJob.id);
-    } else {
-      fetchJob.status = TO_FETCH;
-
-      resourceFetchJobResultPusher.send(JSON.stringify(fetchJob));
-    } 
+    fetchResource(fetchJob.id);
   }
 
   function fetchResource(resourceId) {
@@ -240,7 +252,6 @@ if (cluster.isMaster) {
         var fetchJob = {
           id : resourceId,
           data: responseBody,
-          status : FETCHED,
           timeToFetchAgain : maxAge > 0 ? lastModified + maxAge : null
         };
 
@@ -312,4 +323,8 @@ var socketErrorHandler = function (err) {
       log.error('Socket connection error: ' + err.stack);
       throw new Error(err);
     }
+    log.info('Socket open.');
 };
+
+
+
