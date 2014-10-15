@@ -117,8 +117,6 @@ if (cluster.isMaster) {
     fetchJob.data = null;
 
     fetchJobs[fetchJob.id] = fetchJob;
-
-    var test = fetchJobs[fetchJob.id];
   }
 
   function pushAllJobs() {
