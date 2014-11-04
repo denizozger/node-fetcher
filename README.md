@@ -16,6 +16,8 @@ sudo npm install
 node --harmony start
 ```
 
+Module versions might be old when you install this application, so especially if you get node-gyp compilation errors after installing modules, try updating module versions of related packages on package.json
+
 ## How it works
 
 Please see [node-socketio](https://github.com/denizozger/node-socketio) and [node-dataprovider](https://github.com/denizozger/node-dataprovider) implementations too, all three applications work together - although not necessarily.
