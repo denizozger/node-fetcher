@@ -4,8 +4,15 @@ This Node application receives some data requests from another server, periodica
 
 # Running Locally
 
+Install ZMQ first
+
+```bash
+brew install zeromq
+```
+Alternatively: http://zeromq.org/intro:get-the-software
+
 ``` bash
-npm install
+sudo npm install
 node --harmony start
 ```
 
