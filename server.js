@@ -30,7 +30,7 @@ if (cluster.isMaster) {
   // Receive resource required messages from WebSocketServer
   const resourceRequiredPuller = zmq.socket('pull').connect('tcp://localhost:5432');
   // Publish resource data to WebSocketServer
-  const resourceUpdatedPublisher = zmq.socket('pub').bind('tcp://*:5433', socketErrorHandler);
+  const resourceUpdatedPublisher = zmq.socket('push').bind('tcp://*:5433', socketErrorHandler);
 
   // Push resource fetch jobs to workers
   const resourceFetchJobPusher = zmq.socket('push').bind('ipc://resource-fetch-job-pusher.ipc', socketErrorHandler);
@@ -134,7 +134,7 @@ if (cluster.isMaster) {
   function publishResourceReceived(fetchJob) {
     log.verbose('Master sending updated data of ' + fetchJob.id + ' to web socket server.');
 
-    resourceUpdatedPublisher.send(fetchJob.id + ' ' + JSON.stringify({
+    resourceUpdatedPublisher.send(JSON.stringify({
       id: fetchJob.id, 
       data: fetchJob.data
     }));
